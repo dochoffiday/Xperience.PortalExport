@@ -9,6 +9,7 @@ string? username    = null;
 string? password    = null;
 string  output      = "xperience-export";
 string  environment = "PROD";
+int     months      = 2;
 bool    saveSession = false;
 bool    headed      = false;
 bool    verbose     = false;
@@ -17,20 +18,21 @@ for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
-        case "--url":          url         = args[++i]; break;
-        case "--user":         username    = args[++i]; break;
-        case "--pass":         password    = args[++i]; break;
-        case "--output":       output      = args[++i]; break;
-        case "--environment":  environment = args[++i]; break;
-        case "--save-session": saveSession = true;      break;
-        case "--headed":       headed      = true;      break;
-        case "--verbose":      verbose     = true;      break;
+        case "--url":          url         = args[++i];              break;
+        case "--user":         username    = args[++i];              break;
+        case "--pass":         password    = args[++i];              break;
+        case "--output":       output      = args[++i];              break;
+        case "--environment":  environment = args[++i];              break;
+        case "--months":       months      = int.Parse(args[++i]);   break;
+        case "--save-session": saveSession = true;                   break;
+        case "--headed":       headed      = true;                   break;
+        case "--verbose":      verbose     = true;                   break;
     }
 }
 
 if (url is null)
 {
-    Console.Error.WriteLine("Usage: export-xperience-portal --url <url> [--user <email>] [--pass <password>] [--environment <env>] [--output <dir>] [--save-session] [--headed] [--verbose]");
+    Console.Error.WriteLine("Usage: export-xperience-portal --url <url> [--user <email>] [--pass <password>] [--environment <env>] [--months <n>] [--output <dir>] [--save-session] [--headed] [--verbose]");
     return 1;
 }
 
@@ -100,7 +102,7 @@ if (saveSession)
 
 // ── Verify session / fall back to automated login ─────────────────────────────
 
-var scraper = new PortalScraper(page, environment, verbose || forceHeaded);
+var scraper = new PortalScraper(page, environment, months, verbose || forceHeaded);
 
 await page.GotoAsync(url);
 await page.WaitForLoadStateAsync(LoadState.NetworkIdle);

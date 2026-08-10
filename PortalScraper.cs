@@ -2,7 +2,7 @@ using Microsoft.Playwright;
 
 namespace ExportXperiencePortal;
 
-public class PortalScraper(IPage page, string environment, bool verbose)
+public class PortalScraper(IPage page, string environment, int months, bool verbose)
 {
     private string _baseUrl      = "";
     private string _projectPath  = "";
@@ -57,11 +57,11 @@ public class PortalScraper(IPage page, string environment, bool verbose)
         await SetEnvironmentAsync();
 
         var all          = new List<Dictionary<string, string>>();
-        var monthSelect  = page.Locator("select").Nth(1); // second combobox = Calendar month
+        var monthSelect  = page.Locator("select:visible").Nth(1); // second visible combobox = Calendar month
         var monthOptions = await monthSelect.Locator("option").AllAsync();
 
-        // Options are newest-first; take the first 6
-        foreach (var option in monthOptions.Take(6))
+        // Options are newest-first; take the first N months
+        foreach (var option in monthOptions.Take(months))
         {
             var value = await option.GetAttributeAsync("value") ?? "";
             var label = (await option.InnerTextAsync()).Trim();
@@ -90,44 +90,72 @@ public class PortalScraper(IPage page, string environment, bool verbose)
         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
         await SetEnvironmentAsync();
-        await SetDateRangeAsync(0, 1); // two "Select date..." textboxes
-        await page.Locator("select").Last.SelectOptionAsync("200"); // page size
+        await SetDateRangeAsync(DateTime.UtcNow.AddMonths(-months), DateTime.UtcNow);
+        await page.Locator("select:visible").Last.SelectOptionAsync("200"); // page size
         await page.Locator("button").Filter(new() { HasText = "Apply" }).First.ClickAsync();
         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
         return await ScrapeAllPagesAsync();
     }
 
-    // Exceptions use a date range + limit. Each row has a Details modal with stack trace.
+    // Exceptions use a date range limited to 32 days — iterate 30-day chunks over 6 months.
+    // Each row has a Details modal with stack trace.
     public async Task<List<Dictionary<string, string>>> ScrapeExceptionsAsync()
     {
         Log("Navigating to Exceptions");
-        await page.GotoAsync(SectionUrl("exceptions"));
-        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-
-        await SetEnvironmentAsync();
-        await SetDateRangeAsync(0, 1);
-        await page.Locator("select").Last.SelectOptionAsync("200");
-        await page.Locator("button[type='submit']").ClickAsync();
-        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-
-        return await ScrapeAllPagesWithDetailsAsync();
+        return await ScrapeInChunksAsync("exceptions", withDetails: true);
     }
 
-    // Event log has the same layout as Exceptions.
+    // Event log has the same 32-day limit as Exceptions.
     public async Task<List<Dictionary<string, string>>> ScrapeEventLogAsync()
     {
         Log("Navigating to Event log");
-        await page.GotoAsync(SectionUrl("eventlog"));
-        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+        return await ScrapeInChunksAsync("eventlog", withDetails: true);
+    }
 
-        await SetEnvironmentAsync();
-        await SetDateRangeAsync(0, 1);
-        await page.Locator("select").Last.SelectOptionAsync("200");
-        await page.Locator("button[type='submit']").ClickAsync();
-        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+    // Iterates 30-day date windows over the last 6 months to work around the portal's 32-day limit.
+    private async Task<List<Dictionary<string, string>>> ScrapeInChunksAsync(string section, bool withDetails)
+    {
+        var all    = new List<Dictionary<string, string>>();
+        var chunks = DateChunks(months: months, chunkDays: 7).ToList();
 
-        return await ScrapeAllPagesWithDetailsAsync();
+        foreach (var (from, to) in chunks)
+        {
+            Log($"  Chunk: {from:yyyy-MM-dd} → {to:yyyy-MM-dd}");
+            await page.GotoAsync(SectionUrl(section));
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+            await SetEnvironmentAsync();
+            await SetDateRangeAsync(from, to);
+            await page.Locator("select:visible").Last.SelectOptionAsync("200");
+            await page.Locator("button[type='submit']").ClickAsync();
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+            var rows = withDetails
+                ? await ScrapeAllPagesWithDetailsAsync()
+                : await ScrapeAllPagesAsync();
+
+            Log($"    {rows.Count} rows this chunk");
+            all.AddRange(rows);
+        }
+
+        return all;
+    }
+
+    private static IEnumerable<(DateTime From, DateTime To)> DateChunks(int months, int chunkDays)
+    {
+        var end   = DateTime.UtcNow.Date;
+        var start = end.AddMonths(-months);
+
+        var chunkStart = start;
+        while (chunkStart < end)
+        {
+            var chunkEnd = chunkStart.AddDays(chunkDays);
+            if (chunkEnd > end)
+                chunkEnd = end;
+            yield return (chunkStart, chunkEnd);
+            chunkStart = chunkEnd.AddDays(1);
+        }
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
@@ -138,23 +166,21 @@ public class PortalScraper(IPage page, string environment, bool verbose)
     // The portal uses lowercase values ("prod", "qa").
     private async Task SetEnvironmentAsync()
     {
-        var envSelect = page.Locator("select").First;
+        var envSelect = page.Locator("select:visible").First;
         await envSelect.SelectOptionAsync(new SelectOptionValue { Value = environment.ToLower() });
         Log($"  Environment: {environment}");
     }
 
-    // Fills the From and To date textboxes with a 6-month window.
-    // fromIndex/toIndex are 0-based indices into the visible text inputs in the filter area.
-    private async Task SetDateRangeAsync(int fromIndex, int toIndex)
+    private async Task SetDateRangeAsync(DateTime from, DateTime to)
     {
-        var from = DateTime.UtcNow.AddMonths(-6).ToString("yyyy-MM-dd") + " 00:00";
-        var to   = DateTime.UtcNow.ToString("yyyy-MM-dd") + " 23:59";
+        var fromStr = from.ToString("yyyy-MM-dd") + " 00:00";
+        var toStr   = to.ToString("yyyy-MM-dd")   + " 23:59";
 
         var inputs = page.Locator("input[type='text']");
-        await FillDateInputAsync(inputs.Nth(fromIndex), from);
-        await FillDateInputAsync(inputs.Nth(toIndex), to);
+        await FillDateInputAsync(inputs.Nth(0), fromStr);
+        await FillDateInputAsync(inputs.Nth(1), toStr);
 
-        Log($"  Date range: {from} → {to}");
+        Log($"  Date range: {fromStr} → {toStr}");
     }
 
     private async Task FillDateInputAsync(ILocator input, string value)
@@ -199,13 +225,15 @@ public class PortalScraper(IPage page, string environment, bool verbose)
             Log($"  Page {pageNum}");
 
             var rows = await ScrapeTableAsync();
-            var detailLinks = await page.Locator("table tbody tr td a").AllAsync();
 
             for (var i = 0; i < rows.Count; i++)
             {
-                if (i < detailLinks.Count)
+                // Re-query each time — the portal may re-render the table after a modal closes,
+                // which would make a pre-captured list of locators stale.
+                var detailLink = page.Locator("table tbody tr td a").Nth(i);
+                if (await detailLink.CountAsync() > 0)
                 {
-                    var details = await ScrapeDetailsModalAsync(detailLinks[i]);
+                    var details = await ScrapeDetailsModalAsync(detailLink);
                     foreach (var (k, v) in details)
                         rows[i][k] = v;
                 }
@@ -269,6 +297,9 @@ public class PortalScraper(IPage page, string environment, bool verbose)
             if (await closeBtn.CountAsync() > 0)
                 await closeBtn.ClickAsync();
             await page.WaitForSelectorAsync(".modal.show", new() { State = WaitForSelectorState.Detached, Timeout = 5_000 });
+
+            // Wait for the table to be present again in case the portal re-renders it after close
+            await page.WaitForSelectorAsync("table tbody tr", new() { Timeout = 5_000 });
         }
 
         return result;
@@ -285,6 +316,10 @@ public class PortalScraper(IPage page, string environment, bool verbose)
         {
             var cells = await row.Locator("td").AllInnerTextsAsync();
             if (cells.Count == 0)
+                continue;
+
+            // Single colspan cell = empty-state message ("No events found…") — skip it
+            if (cells.Count == 1 && await row.Locator("td[colspan]").CountAsync() > 0)
                 continue;
 
             var dict = new Dictionary<string, string>();

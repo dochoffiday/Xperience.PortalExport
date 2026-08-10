@@ -17,7 +17,7 @@ The portal login has a CAPTCHA, so the recommended flow is to save your session 
 **Step 1 — save your session (one time, or when it expires):**
 
 ```bash
-export-xperience-portal --url https://portal.xperience-portal.com --save-session
+export-xperience-portal --url https://xperience-portal.com --save-session
 ```
 
 This opens a browser window. Log in manually (CAPTCHA and all), and once you're past the login page the session is saved automatically to `~/.xperience-portal/session.json`.
@@ -25,7 +25,7 @@ This opens a browser window. Log in manually (CAPTCHA and all), and once you're 
 **Step 2 — run the export:**
 
 ```bash
-export-xperience-portal --url https://portal.xperience-portal.com
+export-xperience-portal --url https://xperience-portal.com
 ```
 
 The saved session is loaded automatically. If it has expired, you'll be prompted to run `--save-session` again.
@@ -38,12 +38,37 @@ The saved session is loaded automatically. If it has expired, you'll be prompted
 | `--save-session` | Open a browser, log in manually, and save the session |
 | `--user` | Login email (only needed if logging in without a CAPTCHA) |
 | `--pass` | Login password (only needed if logging in without a CAPTCHA) |
-| `--environment` | Environment filter applied on each tab (default: `PROD`) |
+| `--environment` | Environment filter applied to each section (default: `PROD`) |
+| `--months` | How many months back to export (default: `2`) |
 | `--output` | Directory to write the JSON file (default: `./xperience-export`) |
 | `--headed` | Open a visible browser window — useful for debugging |
 | `--verbose` | Log each step with timestamps |
 
 Output is written to a timestamped file: `xperience-export/export-20260808-143000.json`
+
+### Examples
+
+```bash
+# Default: last 2 months, PROD environment
+export-xperience-portal --url https://xperience-portal.com
+
+# Last 6 months, QA environment
+export-xperience-portal --url https://xperience-portal.com --months 6 --environment QA
+
+# Watch the browser while it runs
+export-xperience-portal --url https://xperience-portal.com --headed --verbose
+```
+
+## How each section is scraped
+
+| Section | Strategy |
+|---------|----------|
+| **Outages** | Iterates the last N calendar months using the month dropdown |
+| **Alerts** | Single date range (N months back → today), page size 200, paginated |
+| **Exceptions** | 7-day chunks over N months, limit 200 per chunk, opens the Details modal per row to capture stack traces |
+| **Event log** | Same as Exceptions |
+
+Exceptions and Event Log are chunked weekly because the portal enforces a 32-day maximum date range for those sections.
 
 ## Output format
 
@@ -51,42 +76,48 @@ Output is written to a timestamped file: `xperience-export/export-20260808-14300
 {
   "exportedAt": "2026-08-08T14:30:00Z",
   "outages": [
-    { "Date": "2026-08-01", "Status": "Resolved", "..." }
+    { "Month": "August 2026", "From UTC": "...", "To UTC": "...", "Description": "..." }
   ],
-  "alerts": [ ... ],
-  "exceptions": [ ... ],
-  "eventLog": [ ... ]
+  "alerts": [
+    { "Fired UTC": "...", "Resolved": "...", "Severity": "Error", "Type": "...", "Description": "..." }
+  ],
+  "exceptions": [
+    { "Date": "...", "Message": "...", "Stack trace": "...", "..." }
+  ],
+  "eventLog": [
+    { "Date and time (UTC)": "...", "Event type": "Warning", "Source": "...", "Event name": "...", "..." }
+  ]
 }
 ```
 
-Each section is a flat array of objects whose keys are the column headers from the portal table.
+Each section is a flat array of objects whose keys are the column headers from the portal table. Exceptions and Event Log rows also include any fields captured from the Details modal.
 
 ## Debugging
 
-Run with `--headed --verbose` to watch the browser navigate each section and see timestamped progress. If a section fails to scrape, the `--headed` mode lets you inspect the page while the tool is running.
+Run with `--headed --verbose` to watch the browser navigate each section and see timestamped progress per chunk and page. If a section isn't returning results, `--headed` lets you see exactly what the portal is showing after filters are applied.
 
 ## Development
 
 ```bash
 git clone https://github.com/dochoffiday/Xperience.PortalExport
 cd Xperience.PortalExport
-dotnet build
+dotnet build ExportXperiencePortal.csproj
 ```
 
 **Run directly without installing:**
 
 ```bash
-dotnet run -- --url https://portal.xperience.io --user you@example.com --pass yourpassword --headed
+dotnet run --project ExportXperiencePortal.csproj -- --url https://xperience-portal.com --headed --verbose
 ```
 
 **Pack and install globally from source:**
 
 ```bash
-dotnet pack
+dotnet pack ExportXperiencePortal.csproj
 dotnet tool install -g --add-source ./bin/Debug Xperience.PortalExport
 
 # To update after making changes:
 dotnet tool uninstall -g Xperience.PortalExport
-dotnet pack
+dotnet pack ExportXperiencePortal.csproj
 dotnet tool install -g --add-source ./bin/Debug Xperience.PortalExport
 ```
