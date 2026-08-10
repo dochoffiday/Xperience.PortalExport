@@ -4,7 +4,7 @@ using Microsoft.Playwright;
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
 
-string? url         = null;
+string  url         = "https://xperience-portal.com";
 string? username    = null;
 string? password    = null;
 string  output      = "xperience-export";
@@ -18,7 +18,7 @@ for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
-        case "--url":          url         = args[++i];              break;
+        case "--url":          url = args[++i];                       break;
         case "--user":         username    = args[++i];              break;
         case "--pass":         password    = args[++i];              break;
         case "--output":       output      = args[++i];              break;
@@ -28,12 +28,6 @@ for (var i = 0; i < args.Length; i++)
         case "--headed":       headed      = true;                   break;
         case "--verbose":      verbose     = true;                   break;
     }
-}
-
-if (url is null)
-{
-    Console.Error.WriteLine("Usage: export-xperience-portal --url <url> [--user <email>] [--pass <password>] [--environment <env>] [--months <n>] [--output <dir>] [--save-session] [--headed] [--verbose]");
-    return 1;
 }
 
 // Session file lives in ~/.xperience-portal/session.json

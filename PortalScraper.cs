@@ -113,15 +113,20 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
         return await ScrapeInChunksAsync("eventlog", withDetails: true);
     }
 
-    // Iterates 30-day date windows over the last 6 months to work around the portal's 32-day limit.
+    // Iterates 7-day date windows to work around the portal's 32-day limit.
     private async Task<List<Dictionary<string, string>>> ScrapeInChunksAsync(string section, bool withDetails)
     {
         var all    = new List<Dictionary<string, string>>();
         var chunks = DateChunks(months: months, chunkDays: 7).ToList();
+        var total  = chunks.Count;
 
-        foreach (var (from, to) in chunks)
+        for (var i = 0; i < total; i++)
         {
+            var (from, to) = chunks[i];
+
+            ChunkProgress(i, total, from, to);
             Log($"  Chunk: {from:yyyy-MM-dd} → {to:yyyy-MM-dd}");
+
             await page.GotoAsync(SectionUrl(section));
             await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
@@ -139,7 +144,21 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
             all.AddRange(rows);
         }
 
+        // Finish the progress line
+        if (!verbose && total > 0)
+            Console.WriteLine($"\r  [{new string('█', 20)}] {total}/{total}  done{new string(' ', 25)}");
+
         return all;
+    }
+
+    // Prints an in-place progress bar (skipped when --verbose is on, since Log already shows chunks).
+    private void ChunkProgress(int chunkIndex, int total, DateTime from, DateTime to)
+    {
+        if (verbose || total == 0)
+            return;
+        var filled = (int)Math.Round((double)chunkIndex / total * 20);
+        var bar    = $"[{new string('█', filled)}{new string('░', 20 - filled)}]";
+        Console.Write($"\r  {bar} {chunkIndex + 1}/{total}  {from:MMM d} – {to:MMM d}   ");
     }
 
     private static IEnumerable<(DateTime From, DateTime To)> DateChunks(int months, int chunkDays)

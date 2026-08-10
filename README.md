@@ -17,7 +17,7 @@ The portal login has a CAPTCHA, so the recommended flow is to save your session 
 **Step 1 — save your session (one time, or when it expires):**
 
 ```bash
-export-xperience-portal --url https://xperience-portal.com --save-session
+export-xperience-portal --save-session
 ```
 
 This opens a browser window. Log in manually (CAPTCHA and all), and once you're past the login page the session is saved automatically to `~/.xperience-portal/session.json`.
@@ -25,7 +25,7 @@ This opens a browser window. Log in manually (CAPTCHA and all), and once you're 
 **Step 2 — run the export:**
 
 ```bash
-export-xperience-portal --url https://xperience-portal.com
+export-xperience-portal
 ```
 
 The saved session is loaded automatically. If it has expired, you'll be prompted to run `--save-session` again.
@@ -34,7 +34,7 @@ The saved session is loaded automatically. If it has expired, you'll be prompted
 
 | Flag | Description |
 |------|-------------|
-| `--url` | **(required)** Base URL of the Xperience Portal |
+| `--url` | Base URL of the Xperience Portal (default: `https://xperience-portal.com`) |
 | `--save-session` | Open a browser, log in manually, and save the session |
 | `--user` | Login email (only needed if logging in without a CAPTCHA) |
 | `--pass` | Login password (only needed if logging in without a CAPTCHA) |
@@ -50,13 +50,13 @@ Output is written to a timestamped file: `xperience-export/export-20260808-14300
 
 ```bash
 # Default: last 2 months, PROD environment
-export-xperience-portal --url https://xperience-portal.com
+export-xperience-portal
 
 # Last 6 months, QA environment
-export-xperience-portal --url https://xperience-portal.com --months 6 --environment QA
+export-xperience-portal --months 6 --environment QA
 
 # Watch the browser while it runs
-export-xperience-portal --url https://xperience-portal.com --headed --verbose
+export-xperience-portal --headed --verbose
 ```
 
 ## How each section is scraped
