@@ -159,10 +159,11 @@ public class PortalScraper(IPage page, string environment, bool verbose)
 
     private async Task FillDateInputAsync(ILocator input, string value)
     {
-        await input.ClickAsync();
-        await input.SelectTextAsync();
-        await input.FillAsync(value);
-        await page.Keyboard.PressAsync("Escape"); // dismiss any date picker popup
+        var handle = await input.ElementHandleAsync();
+        await page.EvaluateAsync(
+            "([el, dateStr]) => { if (el._flatpickr) el._flatpickr.setDate(dateStr, true); }",
+            new object[] { handle!, value }
+        );
     }
 
     // Scrapes all pages of the current table by clicking "next" until exhausted.
