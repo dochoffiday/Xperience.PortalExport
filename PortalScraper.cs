@@ -2,7 +2,7 @@ using Microsoft.Playwright;
 
 namespace ExportXperiencePortal;
 
-public class PortalScraper(IPage page, string environment, int months, bool verbose)
+public class PortalScraper(IPage page, string environment, int months, DateTime? since, bool verbose)
 {
     private string _baseUrl      = "";
     private string _projectPath  = "";
@@ -60,8 +60,8 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
         var monthSelect  = page.Locator("select:visible").Nth(1); // second visible combobox = Calendar month
         var monthOptions = await monthSelect.Locator("option").AllAsync();
 
-        // Options are newest-first; take the first N months
-        foreach (var option in monthOptions.Take(months))
+        // Options are newest-first; take enough months to cover back to `since` (or the default window)
+        foreach (var option in monthOptions.Take(MonthsToFetch()))
         {
             var value = await option.GetAttributeAsync("value") ?? "";
             var label = (await option.InnerTextAsync()).Trim();
@@ -90,7 +90,7 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
         await SetEnvironmentAsync();
-        await SetDateRangeAsync(DateTime.UtcNow.AddMonths(-months), DateTime.UtcNow);
+        await SetDateRangeAsync(since ?? DateTime.UtcNow.AddMonths(-months), DateTime.UtcNow);
         await page.Locator("select:visible").Last.SelectOptionAsync("200"); // page size
         await page.Locator("button").Filter(new() { HasText = "Apply" }).First.ClickAsync();
         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
@@ -117,7 +117,7 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
     private async Task<List<Dictionary<string, string>>> ScrapeInChunksAsync(string section, bool withDetails)
     {
         var all    = new List<Dictionary<string, string>>();
-        var chunks = DateChunks(months: months, chunkDays: 7).ToList();
+        var chunks = DateChunks(since ?? DateTime.UtcNow.AddMonths(-months), chunkDays: 7).ToList();
         var total  = chunks.Count;
 
         for (var i = 0; i < total; i++)
@@ -137,7 +137,7 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
             await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
             var rows = withDetails
-                ? await ScrapeAllPagesWithDetailsAsync()
+                ? await ScrapeAllPagesWithDetailsAsync((done, pageTotal) => ChunkProgress(i, total, from, to, done, pageTotal))
                 : await ScrapeAllPagesAsync();
 
             Log($"    {rows.Count} rows this chunk");
@@ -152,21 +152,34 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
     }
 
     // Prints an in-place progress bar (skipped when --verbose is on, since Log already shows chunks).
-    private void ChunkProgress(int chunkIndex, int total, DateTime from, DateTime to)
+    // rowDone/pageTotal are optional — when present, appended as "row N/M".
+    private void ChunkProgress(int chunkIndex, int total, DateTime from, DateTime to, int? rowDone = null, int? pageTotal = null)
     {
         if (verbose || total == 0)
             return;
-        var filled = (int)Math.Round((double)chunkIndex / total * 20);
-        var bar    = $"[{new string('█', filled)}{new string('░', 20 - filled)}]";
-        Console.Write($"\r  {bar} {chunkIndex + 1}/{total}  {from:MMM d} – {to:MMM d}   ");
+        var filled  = (int)Math.Round((double)chunkIndex / total * 20);
+        var bar     = $"[{new string('█', filled)}{new string('░', 20 - filled)}]";
+        var rowPart = rowDone.HasValue
+            ? $"  row {rowDone}/{(pageTotal.HasValue ? pageTotal.ToString() : "?")}"
+            : "";
+        Console.Write($"\r  {bar} {chunkIndex + 1}/{total}  {from:MMM d} – {to:MMM d}{rowPart,-16}");
     }
 
-    private static IEnumerable<(DateTime From, DateTime To)> DateChunks(int months, int chunkDays)
+    // How many months of the Outages dropdown to fetch, respecting `since` if set.
+    private int MonthsToFetch()
     {
-        var end   = DateTime.UtcNow.Date;
-        var start = end.AddMonths(-months);
+        if (since is null)
+            return months;
+        var now        = DateTime.UtcNow;
+        var monthsBack = (now.Year - since.Value.Year) * 12 + (now.Month - since.Value.Month) + 1;
+        return Math.Max(1, Math.Min(monthsBack, months));
+    }
 
-        var chunkStart = start;
+    private static IEnumerable<(DateTime From, DateTime To)> DateChunks(DateTime start, int chunkDays)
+    {
+        var end        = DateTime.UtcNow.Date;
+        var chunkStart = start.Date;
+
         while (chunkStart < end)
         {
             var chunkEnd = chunkStart.AddDays(chunkDays);
@@ -234,10 +247,12 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
     }
 
     // Same as ScrapeAllPagesAsync but also opens the Details modal for each row.
-    private async Task<List<Dictionary<string, string>>> ScrapeAllPagesWithDetailsAsync()
+    // onRow is called after each row is processed with (rowsDoneThisChunk, totalRowsThisPage).
+    private async Task<List<Dictionary<string, string>>> ScrapeAllPagesWithDetailsAsync(Action<int, int>? onRow = null)
     {
-        var all     = new List<Dictionary<string, string>>();
-        var pageNum = 1;
+        var all        = new List<Dictionary<string, string>>();
+        var pageNum    = 1;
+        var totalDone  = 0;
 
         while (true)
         {
@@ -256,6 +271,9 @@ public class PortalScraper(IPage page, string environment, int months, bool verb
                     foreach (var (k, v) in details)
                         rows[i][k] = v;
                 }
+
+                totalDone++;
+                onRow?.Invoke(totalDone, rows.Count);
             }
 
             all.AddRange(rows);

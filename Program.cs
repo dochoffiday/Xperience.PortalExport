@@ -4,36 +4,62 @@ using Microsoft.Playwright;
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
 
-string  url         = "https://xperience-portal.com";
-string? username    = null;
-string? password    = null;
-string  output      = "xperience-export";
-string  environment = "PROD";
-int     months      = 2;
-bool    saveSession = false;
-bool    headed      = false;
-bool    verbose     = false;
+string   url         = "https://xperience-portal.com";
+string?  username    = null;
+string?  password    = null;
+string   output      = "xperience-export";
+string   environment = "PROD";
+int      months      = 2;
+DateTime? since      = null;
+bool     full        = false;
+bool     saveSession = false;
+bool     headed      = false;
+bool     verbose     = false;
 
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
-        case "--url":          url = args[++i];                       break;
-        case "--user":         username    = args[++i];              break;
-        case "--pass":         password    = args[++i];              break;
-        case "--output":       output      = args[++i];              break;
-        case "--environment":  environment = args[++i];              break;
-        case "--months":       months      = int.Parse(args[++i]);   break;
-        case "--save-session": saveSession = true;                   break;
-        case "--headed":       headed      = true;                   break;
-        case "--verbose":      verbose     = true;                   break;
+        case "--url":          url         = args[++i];                        break;
+        case "--user":         username    = args[++i];                        break;
+        case "--pass":         password    = args[++i];                        break;
+        case "--output":       output      = args[++i];                        break;
+        case "--environment":  environment = args[++i];                        break;
+        case "--months":       months      = int.Parse(args[++i]);             break;
+        case "--since":        since       = DateTime.Parse(args[++i]).ToUniversalTime(); break;
+        case "--full":         full        = true;                             break;
+        case "--save-session": saveSession = true;                             break;
+        case "--headed":       headed      = true;                             break;
+        case "--verbose":      verbose     = true;                             break;
     }
 }
 
-// Session file lives in ~/.xperience-portal/session.json
-var sessionDir  = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".xperience-portal");
-var sessionPath = Path.Combine(sessionDir, "session.json");
+// ── Session + incremental state ───────────────────────────────────────────────
+
+var portalDir   = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".xperience-portal");
+var sessionPath = Path.Combine(portalDir, "session.json");
 var hasSession  = File.Exists(sessionPath);
+
+// Determine `since` from the most recent completed export file unless overridden.
+// A failed run leaves no output file, so the newest file always represents a full success.
+if (!full && since is null && Directory.Exists(output))
+{
+    var lastExport = Directory.GetFiles(output, "export-*.json")
+        .OrderDescending()
+        .FirstOrDefault();
+
+    if (lastExport is not null)
+    {
+        try
+        {
+            var lastJson   = await File.ReadAllTextAsync(lastExport);
+            var lastResult = JsonSerializer.Deserialize<ExportResult>(lastJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (lastResult is not null)
+                since = lastResult.ExportedAt.UtcDateTime;
+        }
+        catch { /* ignore unreadable export */ }
+    }
+}
 
 if (!saveSession && !hasSession && (username is null || password is null))
 {
@@ -78,7 +104,6 @@ if (saveSession)
     Console.WriteLine("Opening portal — please log in manually in the browser window.");
     await page.GotoAsync(url);
 
-    // Wait until the browser leaves the auth/login domain (up to 5 minutes)
     await page.WaitForURLAsync(
         u => !u.Contains("auth.") && !u.Contains("/login") && !u.Contains("/signin"),
         new PageWaitForURLOptions { Timeout = 300_000 }
@@ -86,7 +111,7 @@ if (saveSession)
 
     await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
-    Directory.CreateDirectory(sessionDir);
+    Directory.CreateDirectory(portalDir);
     await context.StorageStateAsync(new BrowserContextStorageStateOptions { Path = sessionPath });
 
     Console.WriteLine($"Session saved to {sessionPath}");
@@ -96,7 +121,7 @@ if (saveSession)
 
 // ── Verify session / fall back to automated login ─────────────────────────────
 
-var scraper = new PortalScraper(page, environment, months, verbose || forceHeaded);
+var scraper = new PortalScraper(page, environment, months, since, verbose || forceHeaded);
 
 await page.GotoAsync(url);
 await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
@@ -108,7 +133,6 @@ if (isOnLoginPage)
     if (hasSession)
     {
         Console.WriteLine("Saved session has expired. Run with --save-session to refresh it.");
-        // Delete stale session so the next run doesn't try to load it
         File.Delete(sessionPath);
     }
 
@@ -139,6 +163,11 @@ scraper.Initialize(page.Url);
 
 // ── Scrape ────────────────────────────────────────────────────────────────────
 
+if (since is not null)
+    Console.WriteLine($"Incremental export from {since.Value:yyyy-MM-dd HH:mm} UTC");
+else
+    Console.WriteLine($"Full export — last {months} months");
+
 Console.WriteLine($"Environment: {environment}");
 
 Console.WriteLine("Scraping Outages...");
@@ -153,9 +182,11 @@ var exceptions = await scraper.ScrapeExceptionsAsync();
 Console.WriteLine("Scraping Event Log...");
 var eventLog = await scraper.ScrapeEventLogAsync();
 
-// ── Persist refreshed session ─────────────────────────────────────────────────
+// ── Persist refreshed session + state ─────────────────────────────────────────
 
-Directory.CreateDirectory(sessionDir);
+var exportedAt = DateTimeOffset.UtcNow;
+
+Directory.CreateDirectory(portalDir);
 await context.StorageStateAsync(new BrowserContextStorageStateOptions { Path = sessionPath });
 
 // ── Write output ──────────────────────────────────────────────────────────────
@@ -163,7 +194,7 @@ await context.StorageStateAsync(new BrowserContextStorageStateOptions { Path = s
 Directory.CreateDirectory(output);
 
 var result = new ExportResult(
-    ExportedAt:  DateTimeOffset.UtcNow,
+    ExportedAt:  exportedAt,
     Outages:     outages,
     Alerts:      alerts,
     Exceptions:  exceptions,
@@ -176,7 +207,7 @@ var json = JsonSerializer.Serialize(result, new JsonSerializerOptions
     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
 });
 
-var outFile = Path.Combine(output, $"export-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json");
+var outFile = Path.Combine(output, $"export-{exportedAt:yyyyMMdd-HHmmss}.json");
 await File.WriteAllTextAsync(outFile, json);
 
 Console.WriteLine();
