@@ -39,21 +39,34 @@ The saved session is loaded automatically. If it has expired, you'll be prompted
 | `--user` | Login email (only needed if logging in without a CAPTCHA) |
 | `--pass` | Login password (only needed if logging in without a CAPTCHA) |
 | `--environment` | Environment filter applied to each section (default: `PROD`) |
-| `--months` | How many months back to export (default: `2`) |
+| `--months` | How many months back to export for a full run (default: `2`) |
+| `--since` | Export only entries after this date (e.g. `2026-07-01`), overrides incremental detection |
+| `--full` | Ignore any previous export and fetch the full `--months` window |
 | `--output` | Directory to write the JSON file (default: `./xperience-export`) |
 | `--headed` | Open a visible browser window — useful for debugging |
 | `--verbose` | Log each step with timestamps |
 
 Output is written to a timestamped file: `xperience-export/export-20260808-143000.json`
 
+### Incremental exports
+
+By default the tool runs incrementally. On each run it scans the output directory for the most recent `export-*.json` file, reads its `exportedAt` timestamp, and only fetches entries newer than that date. This keeps runs fast and avoids re-downloading data you already have.
+
+A failed run leaves no output file, so the most recent file always represents a completed export — there is no risk of a partial run poisoning the incremental baseline.
+
+Use `--full` to bypass this and re-fetch the entire `--months` window, or `--since <date>` to set the cutoff manually.
+
 ### Examples
 
 ```bash
-# Default: last 2 months, PROD environment
+# Default: incremental from last export, or last 2 months if no prior export exists
 export-xperience-portal
 
-# Last 6 months, QA environment
-export-xperience-portal --months 6 --environment QA
+# Force a full re-fetch of the last 6 months, QA environment
+export-xperience-portal --full --months 6 --environment QA
+
+# Fetch everything since a specific date
+export-xperience-portal --since 2026-07-01
 
 # Watch the browser while it runs
 export-xperience-portal --headed --verbose

@@ -11,7 +11,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>export-xperience-portal</ToolCommandName>
     <PackageId>Xperience.PortalExport</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>AJ Hoffer</Authors>
     <Description>CLI tool that scrapes the Kentico Xperience Portal and exports outages, alerts, exceptions, and event log entries to JSON.</Description>
     <PackageProjectUrl>https://github.com/dochoffiday/Xperience.PortalExport</PackageProjectUrl>
